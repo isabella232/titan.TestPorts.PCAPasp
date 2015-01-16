@@ -1,0 +1,174 @@
+/******************************************************************************
+* Copyright (c) 2005, 2014  Ericsson AB
+* All rights reserved. This program and the accompanying materials
+* are made available under the terms of the Eclipse Public License v1.0
+* which accompanies this distribution, and is available at
+* http://www.eclipse.org/legal/epl-v10.html
+*
+* Contributors:
+*   Antal Wuh.Hen.Chang - initial implementation and initial documentation
+*   Adam Delic
+*   Andrea Darabos
+*   Endre Kulcsar
+*   Gabor Szalai
+*   Tibor Szabo
+******************************************************************************/
+//
+//  File:               PCAPasp_Types.ttcn
+//  Description:        PCAP testport type definition file
+//  Rev:                R7A
+//  Prodnr:             CNL 113 443
+//
+
+module PCAPasp_Types
+{
+
+
+  //******************************* for Capture Mode *********************************
+  
+  type enumerated CaptureControl { START, STOP };
+  
+  type record ASP_PCAP_Capture {
+  
+    CaptureControl 	command
+  }
+  
+  type record ASP_PCAP_ConfigReq {
+  
+    charstring 	interface 	optional,
+    integer 	mask		optional,
+    charstring 	filter		optional,
+    charstring 	filename
+  }
+  
+  type enumerated CommandId { FILTERCMD, STARTCMD, STOPCMD };
+  type enumerated CommandStatus { VALID, INVALID };
+  type enumerated CommandError { CAPTURING_HAS_ALREADY_STARTED, THERE_IS_NO_FILTER_SET, CAPTURING_HAS_NOT_STARTED, PORT_IS_ALREADY_CAPTURING, ERROR_LOOKING_NET_UP, ERROR_LIVE_OPENING, ERROR_COMPILING_FILTER, ERROR_SETTING_FILTER, ERROR_SETTING_NONBLOCK_MODE, ERROR_OPENING_OUTPUT_FILE };
+  
+  type record ASP_PCAP_ConfigResp {
+  
+    CommandId		command,
+    CommandStatus 	status,
+    CommandError  	errorMessage	optional
+  }
+
+  //******************************* for DumpReader Mode *********************************
+    
+  type integer RequestedProtocol; // -1 Any protocol or greater than 0
+  
+  type record ASP_PCAP_MessageReq {
+    RequestedProtocol	nextMessage
+  }
+
+  
+  type enumerated Status { VALID_MESSAGE, NO_MESSAGE };
+  type record ASP_PCAP_MessageResp {
+    Status		status,
+    float		timeStamp       optional,
+    integer		contentLength   optional,
+    charstring          destinationIP   optional,
+    integer		destinationPort optional,
+    charstring          sourceIP        optional,
+    integer             sourcePort      optional,
+    ProtocolMsgType     msgtype         optional,
+    octetstring		nextMessage	optional
+  }
+  
+  type integer ProtocolMsgType; // greater than 0
+  type record of integer IntegerArrayType;
+  type record ASP_PCAP_DumpReaderFilter {
+    
+    ProtocolMsgType	messageType,
+    charstring		remoteIp,
+    charstring		localIp,
+    IntegerArrayType	remotePorts
+  }
+
+  type enumerated DumpFilterError { WRONG_SOURCE_IP, WRONG_DESTINATION_IP };  
+  type record ASP_PCAP_DumpFilterResp {
+
+    CommandStatus 	status,
+    DumpFilterError  	errorMessage	optional
+  }
+  
+  type record ASP_PCAP_ConnectionClosed {
+  
+    RequestedProtocol protocol,
+    charstring destinationIP,
+    integer destinationPort,
+    charstring sourceIP,
+    integer sourcePort
+  }
+  
+  type enumerated PCAPError { LOST_SEGMENT }
+  type record ASP_PCAP_Error {
+    PCAPError errorType,
+    charstring destinationIP,
+    integer destinationPort,
+    charstring sourceIP,
+    integer sourcePort
+  }
+  
+  type integer Transport // TCP_Transport(0), UDP_Transport(1), SCTP_Transport(2)
+
+  type function tf_getMsgLen(in octetstring stream, in boolean conn_closed,
+                             in Transport stream_transport) return integer;
+  type function tf_getMsgStartPos(in octetstring stream, boolean conn_closed,
+                             in Transport stream_transport) return integer;
+  
+  type record ASP_PACP_SetupProtocol {
+    ProtocolMsgType    protocol_id,
+    tf_getMsgLen       getMsgLen_function optional,
+    tf_getMsgStartPos  getMsgStartPos_function optional
+  }
+
+  // ESP related stuff
+
+  // function intended to check the Integrity Check Value. 
+  // Return value:
+  //  ICV length in octets 
+  //  -1 if the check failed
+  type function tf_ICV_check(in octetstring ipheader, in octetstring ipdata, inout octetstring user_data) return integer;
+
+  // Decryption function  
+  type function tf_ESP_decrypt(in octetstring ipheader, in octetstring ipdata,
+                             out octetstring decrypted_data, inout octetstring user_data) return boolean;
+
+
+  type enumerated ESP_mode { ESP_DELETE (0), // Remove the associated ESP mode
+                             ESP_TRANSPORT_MODE (1),
+                             ESP_ENCAPSULATION (2) }  // The encapsulation node is not implemented yet.
+
+
+  // The SA lookup will be done based on SPI value
+  // The IP and port filed used only for checking.
+  type record ASP_PCAP_ESP_Setup {
+    integer spi,
+    ESP_mode mode,
+    charstring destinationIP optional,
+    integer destinationPort optional,
+    charstring sourceIP optional,
+    integer sourcePort optional,
+    tf_ICV_check  icv_function optional,    // if omit, no ICV present
+    octetstring   icv_function_user_data optional,
+    tf_ESP_decrypt esp_decrypt_function optional,  // if omit, NULL encription
+    octetstring   esp_decrypt_function_user_data optional
+  }
+  
+  type record ASP_PCAP_ESP_Setup_Resp{
+    ESP_Status  status_code,
+    charstring  status_message optional
+  }
+  
+  type enumerated ESP_Status { ESP_OK, ESP_NOT_DEFINED, NOT_ESP_PACKET, ESP_WRONG_SPI, ESP_ICV_ERROR, ESP_DECRYPT_ERROR, ESP_SETUP_ERROR}
+  
+  type record ASP_PCAP_ESP_Report{
+    ESP_Status   status_code,
+    integer spi,
+    charstring destinationIP,
+    integer destinationPort optional,  // The port number can be encrypted
+    charstring sourceIP,
+    integer sourcePort optional,
+    Transport payload_transport
+  }
+}

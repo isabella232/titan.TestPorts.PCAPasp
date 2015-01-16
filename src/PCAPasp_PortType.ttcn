@@ -1,0 +1,44 @@
+/******************************************************************************
+* Copyright (c) 2005, 2014  Ericsson AB
+* All rights reserved. This program and the accompanying materials
+* are made available under the terms of the Eclipse Public License v1.0
+* which accompanies this distribution, and is available at
+* http://www.eclipse.org/legal/epl-v10.html
+*
+* Contributors:
+*   Antal Wuh.Hen.Chang - initial implementation and initial documentation
+*   Adam Delic
+*   Andrea Darabos
+*   Endre Kulcsar
+*   Gabor Szalai
+*   Tibor Szabo
+******************************************************************************/
+//
+//  File:               PCAPasp_PortType.ttcn
+//  Description:        PCAP testport port definition file
+//  Rev:                R7A
+//  Prodnr:             CNL 113 443
+//
+
+module PCAPasp_PortType
+{
+  import from PCAPasp_Types all;
+//  import from RADIUSmsg_Types all;
+//  import from SIPmsg_Types all;
+
+  type port PCAPasp_PT message {
+    out ASP_PCAP_Capture;
+    out ASP_PCAP_ConfigReq;
+    in  ASP_PCAP_ConfigResp;
+    out ASP_PCAP_MessageReq;
+    in  ASP_PCAP_MessageResp;
+    out ASP_PCAP_DumpReaderFilter;
+    in  ASP_PCAP_DumpFilterResp;
+    out ASP_PACP_SetupProtocol;
+    in  ASP_PCAP_ConnectionClosed;
+    in  ASP_PCAP_Error;
+    out ASP_PCAP_ESP_Setup;
+    in  ASP_PCAP_ESP_Setup_Resp;
+    in  ASP_PCAP_ESP_Report;
+  }
+}
