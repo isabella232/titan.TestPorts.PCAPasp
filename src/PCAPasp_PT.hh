@@ -16,7 +16,7 @@
 //
 //  File:		PCAPasp_PT.hh
 //  Description:	PCAP port header
-//  Rev:                R7A
+//  Rev:                R8A
 //  Prodnr:             CNL 113 443
 
 #ifndef PCAPasp_PT_HH
@@ -61,8 +61,8 @@ class TCPSegment {
     //Stream identifiers:
     unsigned int port_src;
     unsigned int port_dst;
-    struct in_addr ip_src;
-    struct in_addr ip_dst;
+    std::string ip_src;
+    std::string ip_dst;
 
     int seg_type;       // Can be TCP_SEG or UDP_SEG or SCTP_SEG
     bool syn;           // True if it's a SYN TCP segment
@@ -77,11 +77,14 @@ class TCPSegment {
     int protocol_type;  // DIA,LDAP,RADIUS, NONE    
     
   public:
-    TCPSegment();
+    TCPSegment(in_addr src, in_addr dst);
+    TCPSegment(in6_addr src, in6_addr dst);
     ~TCPSegment();
     void put(char* buf, size_t size);
     void log(const char *fmt, ...);
     void log();
+  private:
+    void init();
 };
 
 class ESP_obj{
@@ -159,6 +162,18 @@ struct ip_header {
 	u_int16_t	ip_sum;		/* checksum */
 	struct in_addr  ip_src;
         struct in_addr  ip_dst;	        /* source and dest address */
+};
+
+struct ip6_header {
+    u_int32_t
+        ip_v : 4,           /* version */
+        traffic_class : 8,
+        flow_label : 20;
+    u_int16_t ip_len;        /* total length */
+    u_int8_t  next_header;
+    u_int8_t  hop_limit;
+    struct in6_addr ip_src;
+    struct in6_addr ip_dst;
 };
 
 /*
@@ -326,6 +341,7 @@ public:
         TCPSegment* getNextSegment();
 	
 private:
+    unsigned int ipVersion();
 	char errbuf[PCAP_ERRBUF_SIZE];	// Buffer for PCAP error messages
 	pcap_t *fp; 			// Descriptor of an open capture instance.
 	char* captureFilter;            // filter script
@@ -336,7 +352,9 @@ private:
      	const u_char* actData;
 	struct ether_header* actEthernetHeader;
 	u_char* actEthernetData;
+    unsigned int version;
 	struct ip_header* actIPHeader;
+	struct ip6_header* actIPv6Header;
 	u_char* actIPData;
 	struct tcphdr* actTCPHeader;
 	u_char* actTCPData;
@@ -354,6 +372,8 @@ private:
 	bool getNext();                 // Next PCAP packet from
 	bool getNextEthernet();         // Next ethernet packet containing IP
 	bool getNextIP();               // Next non fragmented IP datagram
+    void deallocateMemory();
+    static const int IP6_HEADER_LEN = 40;
 
 };
 
@@ -522,8 +542,8 @@ class Peer {
     //Data that idientify the stream:
     u_short port_src;
     u_short port_dst;
-    struct in_addr ip_src;
-    struct in_addr ip_dst;
+    std::string ip_src;
+    std::string ip_dst;
     
     TCPBuffer tcp_buf; 		//Buffer for the processed bytes
     SegmentList seg_list; 	//List for the icoming segments that haven't been processed yet.
@@ -540,7 +560,6 @@ class Peer {
     Peer(TCPSegment* segment);
     ~Peer();
     void reset();
-    void init(TCPSegment* segment);
     bool compare(TCPSegment* segment);
     bool sentBy(TCPSegment* segment); //Returns true if the segment was sent by this Peer
     void put(TCPSegment* segment);
@@ -561,6 +580,7 @@ class Peer {
     void log(const char *fmt, ...);
     void dump();
     void log_stat();
+    void init(TCPSegment* segment);
 };
 
 ////////////////////////////////////////////////////////////
@@ -598,13 +618,13 @@ class FilterEntry {
 
   public:
     int protocol_type;
-    struct in_addr ip_src;
-    struct in_addr ip_dst;
+    std::string ip_src;
+    std::string ip_dst;
     unsigned int port_dst;
     bool ip_src_all;
 
   public:
-    FilterEntry(int protocol, struct in_addr sip, bool sip_all, struct in_addr dip, unsigned int rport);
+    FilterEntry(int protocol, std::string src_ip, bool sip_all, std::string dst_ip, unsigned int rport);
     ~FilterEntry();
     bool compare(TCPSegment* seg);
     void log(const char *fmt, ...);
@@ -624,9 +644,10 @@ class FilterTable {
   public:
     FilterTable();
     ~FilterTable();
-    void addEntry(int protocol, struct in_addr sip, bool sip_all, struct in_addr dip, unsigned int rport);
+    void addEntry(int protocol, std::string src_ip, bool sip_all, std::string dst_ip, unsigned int rport);
     int filter(TCPSegment* segment);
     void log(const char *fmt, ...);
+    void clear();
 };
 
 
@@ -684,7 +705,10 @@ protected:
         PeerList peer_list_udp;   // Peer buffer list for UDP streams
         PeerList peer_list_sctp;   // Peer buffer list for SCTP streams
         FilterTable filter_table; // Stream filter table
-
+private:
+  bool isValidIp(CHARSTRING);
+  bool isValidIp4(CHARSTRING);
+  bool isValidIp6(CHARSTRING);
 };
 
 }

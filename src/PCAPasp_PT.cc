@@ -16,7 +16,7 @@
 //
 //  File:               PCAPasp_PT.cc
 //  Description:        PCAP test port source file
-//  Rev:                R7A
+//  Rev:                R8A
 //  Prodnr:             CNL 113 443
 //
 
@@ -372,6 +372,7 @@ void PCAPasp__PT::user_unmap(const char */*system_port*/)
 {
   peer_list_tcp.log_stat();
   Uninstall_Handler();
+  filter_table.clear();
   if (handle) pcap_close( handle);
   if (dumpfile) pcap_dump_close( dumpfile);
 }
@@ -524,51 +525,50 @@ void PCAPasp__PT::outgoing_send(const PCAPasp__Types::ASP__PCAP__ConfigReq& send
 ////////////////////////////////////////////////////////////
 void PCAPasp__PT::outgoing_send(const PCAPasp__Types::ASP__PCAP__DumpReaderFilter& send_par)
 {
-    PCAPasp__Types::ASP__PCAP__DumpFilterResp respStatus;
-    struct in_addr srcIp;
-    struct in_addr destIp;
-    in_addr_t addr;
-    bool srcIpAll = false;
-    int trueFlag = 1;
-    memset(&srcIp, 0, sizeof(srcIp));
-    respStatus.status() = CommandStatus::CommandStatus::VALID;
-    respStatus.errorMessage() = OMIT_VALUE;
+  PCAPasp__Types::ASP__PCAP__DumpFilterResp respStatus;
+  bool srcIpAll = strcmp(send_par.localIp(), "*") == 0;
 
-        if (strcmp(send_par.localIp(), "*")==0)
-        {
-          srcIpAll = true;
-        }
-        else
-        {
-          addr = inet_addr( send_par.localIp() );
-	  
-	  if (addr != (in_addr_t)-1)
-		  memcpy(&(srcIp.s_addr), &addr, sizeof(addr));
-	  else{
-	      trueFlag = 0;
-	      respStatus.status() = CommandStatus::INVALID;
-	      respStatus.errorMessage() = DumpFilterError::WRONG__SOURCE__IP;
-	  }
-        }
-	
-	addr = inet_addr( send_par.remoteIp() );
-	
-	if (addr != (in_addr_t)-1)
-		memcpy(&(destIp.s_addr), &addr, sizeof(addr));
-	else{
-	    trueFlag = 0;
-	    respStatus.status() = CommandStatus::INVALID;
-	    respStatus.errorMessage() = DumpFilterError::WRONG__DESTINATION__IP;
-	}
-	
-	if( trueFlag ){
-          for (int i=0; i<send_par.remotePorts().size_of(); i++) {
-            int port = (int) ( send_par.remotePorts()[i] );
-            filter_table.addEntry((int)send_par.messageType(), srcIp, srcIpAll, destIp, (unsigned int) port);
-          }
-	}
-	
+  if (!srcIpAll && !isValidIp(send_par.localIp())) {
+    respStatus.status() = CommandStatus::INVALID;
+    respStatus.errorMessage() = DumpFilterError::WRONG__SOURCE__IP;
     incoming_message( respStatus );
+    return;
+  }
+
+  if (!isValidIp(send_par.remoteIp())) {
+    respStatus.status() = CommandStatus::INVALID;
+    respStatus.errorMessage() = DumpFilterError::WRONG__DESTINATION__IP;
+    incoming_message( respStatus );
+    return;
+  }
+
+  respStatus.status() = CommandStatus::CommandStatus::VALID;
+  respStatus.errorMessage() = OMIT_VALUE;
+  incoming_message( respStatus );
+  for (int portIdx=0; portIdx < send_par.remotePorts().size_of(); portIdx++) {
+    std::string sourceIp(send_par.localIp());
+    std::string destinationIp(send_par.remoteIp());
+    filter_table.addEntry(
+        (int) send_par.messageType(),
+        sourceIp,
+        srcIpAll,
+        destinationIp,
+        (unsigned int) send_par.remotePorts()[portIdx]);
+  }
+}
+
+bool PCAPasp__PT::isValidIp(CHARSTRING addressToValidate) {
+    return isValidIp4(addressToValidate) || isValidIp6(addressToValidate);
+}
+
+bool PCAPasp__PT::isValidIp4(CHARSTRING addressToValidate) {
+    in_addr ip;
+    return inet_pton(AF_INET, addressToValidate, &ip) == 1;
+}
+
+bool PCAPasp__PT::isValidIp6(CHARSTRING addressToValidate) {
+    in6_addr ip;
+    return inet_pton(AF_INET6, addressToValidate, &ip) == 1;
 }
 
 ////////////////////////////////////////////////////////////
@@ -580,7 +580,7 @@ void PCAPasp__PT::outgoing_send(const PCAPasp__Types::ASP__PCAP__MessageReq& sen
   TCPSegment* seg = NULL;
   bool ready_message = false;
   bool no_more_message = false;
-  
+
   do {
     Peer* act_peer;
     for (int i=0; i<peer_list_tcp.length(); i++) {
@@ -598,8 +598,8 @@ log("peer_list_tcp, embedded_length %d", embedded_length);
             incoming_msg.contentLength() = embedded_length;
             incoming_msg.sourcePort() = act_peer->port_src;
             incoming_msg.destinationPort() = act_peer->port_dst;
-            incoming_msg.sourceIP() = inet_ntoa(act_peer->ip_src);
-            incoming_msg.destinationIP() = inet_ntoa(act_peer->ip_dst);
+            incoming_msg.sourceIP() = act_peer->ip_src.c_str();
+            incoming_msg.destinationIP() = act_peer->ip_dst.c_str();
             incoming_msg.msgtype()=act_peer->protocol_type;
             incoming_msg.nextMessage()=OCTETSTRING(embedded_length,act_peer->tcp_buf.get_read_data());
             incoming_message(incoming_msg);
@@ -613,19 +613,18 @@ log("peer_list_tcp, embedded_length %d", embedded_length);
           ASP__PCAP__ConnectionClosed apcc_msg;
           apcc_msg.protocol() = act_peer->protocol_type;
           apcc_msg.destinationPort() = act_peer->port_dst;
-          apcc_msg.destinationIP() = inet_ntoa(act_peer->ip_dst);
+          apcc_msg.destinationIP() = act_peer->ip_dst.c_str();
           apcc_msg.sourcePort() = act_peer->port_src;
-          apcc_msg.sourceIP() = inet_ntoa(act_peer->ip_src);
+          apcc_msg.sourceIP() = act_peer->ip_src.c_str();
           incoming_message(apcc_msg);
       }
       if(ready_message) break;
     } // for each tcp peer
 
-
     if (!ready_message) //if no requested message was found we iterate through the UDP streams as well.
     for (int i=0; i<peer_list_udp.length(); i++) {
       act_peer = peer_list_udp.elementAt(i);
-      
+
       if (act_peer->tcp_buf.length > 0) { // is there anything in the buffer?
         int embedded_length=act_peer->get_msg_len();
         if(embedded_length>0){
@@ -636,8 +635,8 @@ log("peer_list_tcp, embedded_length %d", embedded_length);
             incoming_msg.contentLength() = embedded_length;
             incoming_msg.sourcePort() = act_peer->port_src;
             incoming_msg.destinationPort() = act_peer->port_dst;
-            incoming_msg.sourceIP() = inet_ntoa(act_peer->ip_src);
-            incoming_msg.destinationIP() = inet_ntoa(act_peer->ip_dst);
+            incoming_msg.sourceIP() = act_peer->ip_src.c_str();
+            incoming_msg.destinationIP() = act_peer->ip_dst.c_str();
             incoming_msg.msgtype()=act_peer->protocol_type;
             incoming_msg.nextMessage()=OCTETSTRING(embedded_length,act_peer->tcp_buf.get_data());
             incoming_message(incoming_msg);
@@ -648,7 +647,6 @@ log("peer_list_tcp, embedded_length %d", embedded_length);
       } // if peer's buffer > 0
       if(ready_message) break;
     } // for each udp peer
-
     if (!ready_message) //if no requested message was found we iterate through the SCTP streams as well.
     for (int i=0; i<peer_list_sctp.length(); i++) {
       act_peer = peer_list_sctp.elementAt(i);
@@ -663,8 +661,8 @@ log("peer_list_tcp, embedded_length %d", embedded_length);
             incoming_msg.contentLength() = embedded_length;
             incoming_msg.sourcePort() = act_peer->port_src;
             incoming_msg.destinationPort() = act_peer->port_dst;
-            incoming_msg.sourceIP() = inet_ntoa(act_peer->ip_src);
-            incoming_msg.destinationIP() = inet_ntoa(act_peer->ip_dst);
+            incoming_msg.sourceIP() = act_peer->ip_src.c_str();
+            incoming_msg.destinationIP() = act_peer->ip_dst.c_str();
             incoming_msg.msgtype()=act_peer->protocol_type;
             incoming_msg.nextMessage()=OCTETSTRING(embedded_length,act_peer->get_first_sctp_data());
             incoming_message(incoming_msg);
@@ -680,24 +678,23 @@ log("peer_list_tcp, embedded_length %d", embedded_length);
       act_pt=this;
       seg = getNextFilteredSegment();
       if (seg) { 
-      
         seg->log();
         
         if (seg->seg_type == SCTP_SEG && seg->fin) { //PCAP_ASP_ConnectionClosed must be sent to TTCN in case a TCP connection is terminated
           ASP__PCAP__ConnectionClosed apcc_msg;
           apcc_msg.protocol() = seg->protocol_type;
           apcc_msg.destinationPort() = seg->port_dst;
-          apcc_msg.destinationIP() = inet_ntoa(seg->ip_dst);
+          apcc_msg.destinationIP() = seg->ip_dst.c_str();
           apcc_msg.sourcePort() = seg->port_src;
-          apcc_msg.sourceIP() = inet_ntoa(seg->ip_src);
+          apcc_msg.sourceIP() = seg->ip_src.c_str();
           incoming_message(apcc_msg);
         }
         
         if (seg->seg_type == TCP_SEG) {
             INTEGER port_dst = seg->port_dst;
             INTEGER port_src = seg->port_src;
-            CHARSTRING ip_src = inet_ntoa(seg->ip_src);
-            CHARSTRING ip_dst = inet_ntoa(seg->ip_dst);
+            CHARSTRING ip_src = seg->ip_src.c_str();
+            CHARSTRING ip_dst = seg->ip_dst.c_str();
           if (!peer_list_tcp.sendSegmentToPeer(seg)) {
             //We detected a lost segment.
             //Note that, the source and destination directions are exchanged
@@ -718,8 +715,8 @@ log("peer_list_tcp, embedded_length %d", embedded_length);
         else if (seg->seg_type == SCTP_SEG) {
             INTEGER port_dst = seg->port_dst;
             INTEGER port_src = seg->port_src;
-            CHARSTRING ip_src = inet_ntoa(seg->ip_src);
-            CHARSTRING ip_dst = inet_ntoa(seg->ip_dst);
+            CHARSTRING ip_src = seg->ip_src.c_str();
+            CHARSTRING ip_dst = seg->ip_dst.c_str();
           if (!peer_list_sctp.sendSegmentToPeer(seg)) {
             //We detected a lost segment.
             //Note that, the source and destination directions are exchanged
@@ -778,28 +775,24 @@ TCPSegment* PCAPasp__PT::getNextFilteredSegment()
   TCPSegment* seg = NULL;
   int protocol_type;
   bool found = false;
-  bool last = false;
-  
   do {
     seg = dump_reader.getNextSegment();
-    if (seg) {
-      protocol_type = filter_table.filter(seg);
-      log("Check protocol");
-      if (protocol_type != NO_PROTOCOL) {
+    if (!seg) {
+      break;
+    }
+    protocol_type = filter_table.filter(seg);
+    log("Check protocol");
+    if (protocol_type != NO_PROTOCOL) {
       log("found protocol");
-        seg->protocol_type = protocol_type;
-        found = true;
-      }
-      else {
-      log("no protocol");
-        delete seg; seg = NULL;
-      }
+      seg->protocol_type = protocol_type;
+      found = true;
     }
     else {
-      last = true;
+      log("no protocol");
+      delete seg; seg = NULL;
     }
   }
-  while (!found && !last);
+  while (!found);
   return seg;
 }
 
@@ -818,7 +811,27 @@ void PCAPasp__PT::log(const char *fmt, ...) {
 ////////////////////////////////////////////////////////////
 // TCPSegment implementation
 ////////////////////////////////////////////////////////////
-TCPSegment::TCPSegment()
+
+TCPSegment::TCPSegment(in_addr src, in_addr dst)  {
+  this->init();
+  char buff[INET_ADDRSTRLEN];
+  inet_ntop(AF_INET, &src, buff, INET_ADDRSTRLEN);
+  this->ip_src = buff;
+  inet_ntop(AF_INET, &dst, buff, INET_ADDRSTRLEN);
+  this->ip_dst = buff;
+}
+
+TCPSegment::TCPSegment(in6_addr src, in6_addr dst)  {
+  this->init();
+  char buff[INET6_ADDRSTRLEN];
+  inet_ntop(AF_INET6, &src, buff, INET6_ADDRSTRLEN);
+  this->ip_src = buff;
+  inet_ntop(AF_INET6, &dst, buff, INET6_ADDRSTRLEN);
+  this->ip_dst = buff;
+}
+
+
+void TCPSegment::init()
 {
   payload = NULL;
   length = 0;
@@ -864,8 +877,8 @@ void TCPSegment::log() {
   TTCN_Logger::begin_event(TTCN_DEBUG);
   TTCN_Logger::log_event("-=> TCPSegment object: \n");
   TTCN_Logger::log_event("address %p ¦n", this);
-  TTCN_Logger::log_event("IP src: %s ", inet_ntoa(ip_src));
-  TTCN_Logger::log_event("dst: %s\n", inet_ntoa(ip_dst));
+  TTCN_Logger::log_event("IP src: %s ", ip_src.c_str());
+  TTCN_Logger::log_event("dst: %s\n", ip_dst.c_str());
   TTCN_Logger::log_event("Port src: %d dst: %d\n", port_src, port_dst);
   switch (seg_type) {
     case UDP_SEG:
@@ -889,10 +902,13 @@ void TCPSegment::log() {
 ////////////////////////////////////////////////////////////
 // DumpReader implementation
 ////////////////////////////////////////////////////////////
-DumpReader::DumpReader () {
-  fp = NULL;
-  frameCounter = 1;
-}
+DumpReader::DumpReader()
+:   fp(NULL),
+  actIPHeader(NULL),
+  actIPv6Header(NULL),
+  frameCounter(1)
+
+{ }
 
 DumpReader::~DumpReader() {
   if (fp) pcap_close(fp);
@@ -939,62 +955,60 @@ bool DumpReader::setFilter(char* filter_script, bpf_u_int32 netmask) {
 }
 
 bool DumpReader::getNextEthernet() {
-  bool ether_found = false;
-  while (!ether_found) {
-    if (this->getNext())
+  while (getNext()) {
+    struct ::ether_header* ether_ptr = (struct ::ether_header *) actData;
+    u_short protocol_type = ntohs (ether_ptr->ether_type);
+    if ( protocol_type == ETHERTYPE_IP || protocol_type == ETHERTYPE_IPV6 )
     {
-      struct ::ether_header* ether_ptr;
-      ether_ptr = (struct ::ether_header *) actData;
-      if ( ntohs (ether_ptr->ether_type) == ETHERTYPE_IP )
-      {
-        ether_found = true;
-	actEthernetHeader = ether_ptr;
-	actEthernetData = (u_char*) actData;
-	actEthernetData += sizeof(struct ::ether_header);
-        return true;
-      }
-      else if ( ntohs (ether_ptr->ether_type) == PCAP_ETHERTYPE_VLAN8021Q )
-      {
-        struct vlan_header* vlan_ptr;
-        vlan_ptr = (struct vlan_header*) ((u_char*)actData + sizeof(struct ::ether_header));
-        if (ntohs(vlan_ptr->vlan_type) == ETHERTYPE_IP)
-        {
-          ether_found = true;
-	  actEthernetHeader = ether_ptr;
-	  actEthernetData = (u_char*) actData;
-	  actEthernetData += sizeof(struct ::ether_header) + sizeof(vlan_header);
-          return true;
-        }
-        else TTCN_warning("Not an IP datagram in VLAN 802.1Q packet");
-      }
-      else
-      {
-        TTCN_warning("Not an IP datagram or unknown Ethernet header");
-      }
+      actEthernetHeader = ether_ptr;
+      actEthernetData = const_cast<u_char*>(actData);
+      actEthernetData += sizeof(struct ::ether_header);
+      return true;
     }
-    else break;
+    else if ( protocol_type == PCAP_ETHERTYPE_VLAN8021Q )
+    {
+      struct vlan_header* vlan_ptr = (struct vlan_header*) (const_cast<u_char*>(actData) + sizeof(struct ::ether_header));
+      if (ntohs(vlan_ptr->vlan_type) != ETHERTYPE_IP)
+      {
+        TTCN_warning("Not an IP datagram in VLAN 802.1Q packet");
+        continue;
+      }
+      actEthernetHeader = ether_ptr;
+      actEthernetData = const_cast<u_char*>(actData);
+      actEthernetData += sizeof(struct ::ether_header) + sizeof(vlan_header);
+      return true;
+    }
+    else
+    {
+      TTCN_warning("Not an IP datagram or unknown Ethernet header");
+    }
   }
   return false;
 }
 
+unsigned int DumpReader::ipVersion() {
+  /*
+   * First 4 bits of both IPv4 and v6 header is version of IP.
+   *
+   *                                           example values:
+   * actEthernetData[0] contains first 8 bits: 0010 1010
+   * ...so, we need to clear last 4:           0010 0000
+   * ...and shift everything:                  0000 0010
+   */
+  return (actEthernetData[0] & 0xf0) >> 4;
+}
 
 bool DumpReader::getNextIP() {
   free_ptr = false;
-  while (true) {
-    u_int hlen,version;
-    unsigned int len;
-    if (this->getNextEthernet()) {
-      struct ip_header* ip_ptr;
-      ip_ptr = (struct ip_header *) actEthernetData;
-      len = ntohs(ip_ptr->ip_len);
-      hlen = IP_HL(ip_ptr);
-      version = IP_V(ip_ptr);
-
-      /* It must be IPv4 */
-      if (version == 4) {
+  while (this->getNextEthernet()) {
+      this->version = ipVersion();
+      if (this->version == 4) {
+        struct ip_header* ip_ptr = (struct ip_header *) actEthernetData;
+        unsigned int len = ntohs(ip_ptr->ip_len);
+        u_int hlen = IP_HL(ip_ptr);
         /* make sure that the packet is at least as long as the min IP header */
         if (actHeader->caplen > sizeof(struct ip_header)) {
-        
+
           /* check and see if we got everything.  NOTE: we must use
            * ip_total_len after this, because we may have captured bytes
            * beyond the end of the packet (e.g. ethernet padding). */
@@ -1082,18 +1096,17 @@ bool DumpReader::getNextIP() {
                   act_pt->inc_msg(ret_val);
               }*/
             }
-          
             if (!(ntohs(ip_ptr->ip_off) & (IP_OFFMASK | IP_MF))) { // no fragmentation
-            
+
               /* We found it! */
               actIPHeader = ip_ptr;
-	      actIPData = (u_char*) actEthernetData+(hlen << 2);
+              actIPData = (u_char*) actEthernetData+(hlen << 2);
               TTCN_warning("whole IP datagramm");
               return true;
             }
             else{
               actIPHeader = ip_ptr;
-	      actIPData = (u_char*) actEthernetData+(hlen << 2);
+              actIPData = (u_char*) actEthernetData+(hlen << 2);
               TTCN_warning("fragfmented IP datagramm");
               if(fragment_buffer.add_ip_fragment(&actIPHeader,&actIPData)){
                 free_ptr = true;
@@ -1106,112 +1119,108 @@ bool DumpReader::getNextIP() {
         }
         else TTCN_warning("Received truncated IP datagram!");
       }
-      else TTCN_warning("Unknown IP version: %d",version);
-    }
-    else break;
+      else if (this->version == 6) {
+        // Warning: IPSec for IP v6 not implemented yet
+        actIPv6Header = (struct ip6_header *) this->actEthernetData;
+        actIPData = this->actEthernetData + IP6_HEADER_LEN;
+        return true;
+      }
+      else {
+        TTCN_warning("Unknown IP version: %d", this->version);
+      }
   }
   return false;
 }
 
 TCPSegment* DumpReader::getNextSegment() {
-  bool segment_found = false;
-  TCPSegment* ret_seg = NULL;
-  while (!segment_found) {
-    if (getNextIP()) {
-      /* we're only looking for TCP or UDP; throw away everything else */
-      if (actIPHeader->ip_p == IPPROTO_TCP) {
-        segment_found = true;
-        actTCPHeader = (struct tcphdr *) actIPData;
-        
-        // calculate the total length of the TCP header including options
-        u_int tcp_header_len = TCP_OFF(actTCPHeader) * 4;
-        actTCPData = (u_char*) actTCPHeader + tcp_header_len;
-        
-        // compute the length of the TCP payload
-        u_int ip_total_len = ntohs(actIPHeader->ip_len);
-        u_int ip_header_len = IP_HL(actIPHeader) * 4;
-        u_int tcp_total_len = ip_total_len - ip_header_len;
-        u_int tcp_data_len = tcp_total_len - tcp_header_len;
-        
-        // we return with the needed information
-        ret_seg = new TCPSegment();
-        ret_seg->seg_type = TCP_SEG;
-        ret_seg->ip_src = actIPHeader->ip_src;
-        ret_seg->ip_dst = actIPHeader->ip_dst;
-        ret_seg->port_src = ntohs(actTCPHeader->th_sport);
-        ret_seg->port_dst = ntohs(actTCPHeader->th_dport);
-        ret_seg->seq_num = ntohl(actTCPHeader->th_seq);
-        ret_seg->ack_num = ntohl(actTCPHeader->th_ack);
-        if (actTCPHeader->th_flags & TH_SYN) ret_seg->syn = true;
-        if (actTCPHeader->th_flags & TH_FIN) ret_seg->fin = true;
-        ret_seg->put((char*)actTCPData,(size_t)tcp_data_len);
-        ret_seg->timestamp = (double)actHeader->ts.tv_sec + (double)actHeader->ts.tv_usec/1000000.0;
-        if(free_ptr){
-          free_ptr=false;
-          Free(actIPHeader);
-          Free(actIPData);
-        }
-        return ret_seg;
+  while (getNextIP()) {
+    u_int8_t transport_layer_proto;
+    u_int ip_total_len;
+    u_int ip_header_len;
+    TCPSegment* ret_seg = NULL;
+    switch (this->version) {
+      case 4: {
+        ret_seg = new TCPSegment(
+            actIPHeader->ip_src,
+            actIPHeader->ip_dst);
+        ip_total_len = ntohs(actIPHeader->ip_len);
+        ip_header_len = IP_HL(actIPHeader) * 4; // number of 32-bit words
+                     // needs to be multiplied by 4 to get number of octets
+        transport_layer_proto = this->actIPHeader->ip_p;
       }
-      else if (actIPHeader->ip_p == IPPROTO_UDP) {
-        segment_found = true;
-        actUDPHeader = (struct udphdr *) actIPData;
-        actUDPData = ((u_char*) (actUDPHeader))+8;
-        
-        // compute the length of the UDP payload
-        u_int udp_total_len = ntohs(actUDPHeader->uh_ulen);
-        u_int udp_data_len = udp_total_len-8;
-        
-        // we return with the necessery information
-        ret_seg = new TCPSegment();
-        ret_seg->seg_type = UDP_SEG;
-        ret_seg->ip_src = actIPHeader->ip_src;
-        ret_seg->ip_dst = actIPHeader->ip_dst;
-        ret_seg->port_src = ntohs(actUDPHeader->uh_sport);
-        ret_seg->port_dst = ntohs(actUDPHeader->uh_dport);
-        ret_seg->put((char*) actUDPData, (size_t) udp_data_len);
-        ret_seg->timestamp = (double)actHeader->ts.tv_sec + (double)actHeader->ts.tv_usec/1000000.0;
-        if(free_ptr){
-          free_ptr=false;
-          Free(actIPHeader);
-          Free(actIPData);
-        }
-        return ret_seg;
+      break;
+      case 6:{
+        ret_seg = new TCPSegment(
+            actIPv6Header->ip_src,
+            actIPv6Header->ip_dst);
+        ip_header_len = IP6_HEADER_LEN;
+        ip_total_len = actIPv6Header->ip_len + ip_header_len;
+        transport_layer_proto = this->actIPv6Header->next_header;
       }
-      else if (actIPHeader->ip_p == IPPROTO_SCTP) {
-        segment_found = true;
-        actSCTPHeader = (struct sctphdr *) actIPData;
-        
-        u_int sctp_header_len = 12;
-        actSCTPData = (u_char*) actSCTPHeader + sctp_header_len;
-        
-        // compute the length of the SCTP payload
-        u_int ip_total_len = ntohs(actIPHeader->ip_len);
-        u_int ip_header_len = IP_HL(actIPHeader) * 4;
-        u_int sctp_total_len = ip_total_len - ip_header_len;
-        u_int sctp_data_len = sctp_total_len - sctp_header_len;
-
-        ret_seg = new TCPSegment();
-        ret_seg->seg_type = SCTP_SEG;
-        ret_seg->ip_src = actIPHeader->ip_src;
-        ret_seg->ip_dst = actIPHeader->ip_dst;
-        ret_seg->port_src = ntohs(actSCTPHeader->sh_sport);
-        ret_seg->port_dst = ntohs(actSCTPHeader->sh_dport);
-        ret_seg->put((char*) actSCTPData, (size_t) sctp_data_len);
-        ret_seg->timestamp = (double)actHeader->ts.tv_sec + (double)actHeader->ts.tv_usec/1000000.0;
-        if(free_ptr){
-          free_ptr=false;
-          Free(actIPHeader);
-          Free(actIPData);
-        }
-        return ret_seg;
-      }
+      break;
     }
-    else break;
+    switch (transport_layer_proto) {
+      case IPPROTO_TCP:
+        {
+          actTCPHeader = (struct tcphdr *) actIPData;
+          u_int tcp_header_len = TCP_OFF(actTCPHeader) * 4;
+          actTCPData = (u_char*) actTCPHeader + tcp_header_len;
+          ret_seg->seg_type = TCP_SEG;
+          u_int tcp_total_len = ip_total_len - ip_header_len;
+          u_int tcp_data_len = tcp_total_len - tcp_header_len;
+          ret_seg->port_src = ntohs(actTCPHeader->th_sport);
+          ret_seg->port_dst = ntohs(actTCPHeader->th_dport);
+          ret_seg->seq_num = ntohl(actTCPHeader->th_seq);
+          ret_seg->ack_num = ntohl(actTCPHeader->th_ack);
+          if (actTCPHeader->th_flags & TH_SYN) ret_seg->syn = true;
+          if (actTCPHeader->th_flags & TH_FIN) ret_seg->fin = true;
+          ret_seg->put((char*) actTCPData, (size_t) tcp_data_len);
+          break;
+        }
+      case IPPROTO_UDP:
+        {
+          actUDPHeader = (struct udphdr *) actIPData;
+          u_int udp_total_len = ntohs(actUDPHeader->uh_ulen);
+          actUDPData = ((u_char*) (actUDPHeader))+8;
+          u_int udp_data_len = udp_total_len-8;
+          ret_seg->seg_type = UDP_SEG;
+          ret_seg->port_src = ntohs(actUDPHeader->uh_sport);
+          ret_seg->port_dst = ntohs(actUDPHeader->uh_dport);
+          ret_seg->put((char*) actUDPData, (size_t) udp_data_len);
+          break;
+        }
+      case IPPROTO_SCTP:
+        {
+          actSCTPHeader = (struct sctphdr *) actIPData;
+          const u_int sctp_header_len = 12;
+          actSCTPData = (u_char*) actSCTPHeader + sctp_header_len;
+          u_int sctp_total_len = ip_total_len - ip_header_len;
+          u_int sctp_data_len = sctp_total_len - sctp_header_len;
+          ret_seg->seg_type = SCTP_SEG;
+          ret_seg->port_src = ntohs(actSCTPHeader->sh_sport);
+          ret_seg->port_dst = ntohs(actSCTPHeader->sh_dport);
+          ret_seg->put((char*) actSCTPData, (size_t) sctp_data_len);
+          break;
+        }
+      default:
+        continue;
+    }
+    ret_seg->timestamp = (double)actHeader->ts.tv_sec
+        + (double)actHeader->ts.tv_usec/1.0e6;
+    deallocateMemory();
+    return ret_seg;
   }
   return NULL;
 }
 
+void DumpReader::deallocateMemory() {
+  if(free_ptr){
+    free_ptr=false;
+    Free(actIPHeader);
+    actIPHeader = NULL;
+    Free(actIPData);
+  }
+}
 
 ////////////////////////////////////////////////////////////
 // TCPBuffer implementation
@@ -1723,25 +1732,22 @@ void Peer::init(TCPSegment* segment)
 
 bool Peer::compare(TCPSegment* segment)
 {
-  if (segment != NULL)
-    if ( (port_src == segment->port_src) && (port_dst == segment->port_dst) )
-      if (memcmp(&ip_src,&(segment->ip_src),sizeof(struct in_addr))==0)
-        if (memcmp(&ip_dst,&(segment->ip_dst),sizeof(struct in_addr))==0)
-          return true;
-
-
-  return false;
+    if (segment == NULL)
+        return false;
+    return port_src == segment->port_src
+        && port_dst == segment->port_dst
+        && ip_src == segment->ip_src
+        && ip_dst == segment->ip_dst;
 }
 
 bool Peer::sentBy(TCPSegment* segment)
 {
-  if (segment != NULL)
-    if ( (port_src == segment->port_dst) && (port_dst == segment->port_src) )
-      if (memcmp(&ip_src,&(segment->ip_dst),sizeof(struct in_addr))==0)
-        if (memcmp(&ip_dst,&(segment->ip_src),sizeof(struct in_addr))==0)
-          return true;
-
-  return false;
+    if (segment == NULL)
+        return false;
+    return port_src == segment->port_dst
+        && port_dst == segment->port_src
+        && ip_src == segment->ip_dst
+        && ip_dst == segment->ip_src;
 }
 
 int Peer::get_msg_len(){
@@ -1818,8 +1824,8 @@ bool Peer::ack(TCPSegment* segment)
                   // If we won't be able to put it, we drop it
                   else if (seg->seq_num < tcp_buf.seq_num) {
                     TTCN_warning("Unprocessed segment dropped during ack recovering: IP src: %s, dst: %s; Port src: %d, dst: %d seq: %lu",
-                    inet_ntoa(seg->ip_src),
-                    inet_ntoa(seg->ip_dst),
+                    seg->ip_src.c_str(),
+                    seg->ip_dst.c_str(),
                     seg->port_src,
                     seg->port_dst,
                     seg->seq_num
@@ -1848,8 +1854,8 @@ bool Peer::ack(TCPSegment* segment)
             seg = seg_list.elementAt(i);
             if (seg->seq_num < tcp_buf.seq_num) {
               TTCN_warning("Unprocessed segment dropped during ack recovering: IP src: %s, dst: %s; Port src: %d, dst: %d seq: %lu",
-              inet_ntoa(seg->ip_src),
-              inet_ntoa(seg->ip_dst),
+              seg->ip_src.c_str(),
+              seg->ip_dst.c_str(),
               seg->port_src,
               seg->port_dst,
               seg->seq_num
@@ -1897,8 +1903,8 @@ void Peer::put(TCPSegment* segment)
                 // If we won't be able to put it, we drop it
                 else if (seg->seq_num < tcp_buf.seq_num) {
                   TTCN_warning("Unprocessed TCP segment is dropped: IP src: %s, dst: %s; Port src: %d, dst: %d seq: %lu",
-                    inet_ntoa(seg->ip_src),
-                    inet_ntoa(seg->ip_dst),
+                    seg->ip_src.c_str(),
+                    seg->ip_dst.c_str(),
                     seg->port_src,
                     seg->port_dst,
                     seg->seq_num
@@ -1922,8 +1928,8 @@ void Peer::put(TCPSegment* segment)
         else {
           if (segment->seq_num < tcp_buf.seq_num) {
             TTCN_warning("TCP segment is dropped: IP src: %s, dst: %s; Port src: %d, dst: %d seq: %lu",
-              inet_ntoa(segment->ip_src),
-              inet_ntoa(segment->ip_dst),
+              segment->ip_src.c_str(),
+              segment->ip_dst.c_str(),
               segment->port_src,
               segment->port_dst,
               segment->seq_num
@@ -2147,13 +2153,12 @@ void PeerList::log(const char *fmt, ...) {
 ////////////////////////////////////////////////////////////
 // FilterEntry implementation
 ////////////////////////////////////////////////////////////
-FilterEntry::FilterEntry(int protocol, struct in_addr sip, bool sip_all, struct in_addr dip, unsigned int rport)
-{
-  protocol_type = protocol;
-  ip_src = sip;
-  ip_src_all = sip_all;
-  ip_dst = dip;
-  port_dst = rport;
+FilterEntry::FilterEntry(int protocol, std::string src_ip, bool sip_all, std::string dst_ip, unsigned int rport)
+  : protocol_type(protocol),
+    ip_src(src_ip),
+    ip_dst(dst_ip),
+    port_dst(rport),
+    ip_src_all(sip_all) {
 }
 
 FilterEntry::~FilterEntry() {
@@ -2164,11 +2169,11 @@ bool FilterEntry::compare(TCPSegment* seg) {
     if ( (port_dst == seg->port_dst) )
     {
       if (ip_src_all)
-        if (memcmp(&ip_dst,&(seg->ip_dst),sizeof(struct in_addr))==0)
+        if (ip_dst == seg->ip_dst)
           return true;
         else return false;
-      else if (memcmp(&ip_src,&(seg->ip_src),sizeof(struct in_addr))==0)
-        if (memcmp(&ip_dst,&(seg->ip_dst),sizeof(struct in_addr))==0)
+      else if (ip_src == seg->ip_src)
+        if (ip_dst == seg->ip_dst)
           return true;
         else return false;
       else return false;
@@ -2176,11 +2181,11 @@ bool FilterEntry::compare(TCPSegment* seg) {
     else if ( (port_dst == seg->port_src) )
     {
       if (ip_src_all)
-        if (memcmp(&ip_dst,&(seg->ip_src),sizeof(struct in_addr))==0)
+        if (ip_dst == seg->ip_src)
           return true;
         else return false;
-      else if (memcmp(&ip_src,&(seg->ip_dst),sizeof(struct in_addr))==0)
-        if (memcmp(&ip_dst,&(seg->ip_src),sizeof(struct in_addr))==0)
+      else if (ip_src == seg->ip_dst)
+        if (ip_dst == seg->ip_src)
           return true;
         else return false;
       else return false;
@@ -2211,13 +2216,12 @@ FilterTable::~FilterTable()
   entry_list.destruct();
 }
 
-void FilterTable::addEntry(int protocol, struct in_addr sip, bool sip_all, struct in_addr dip, unsigned int rport)
+void FilterTable::addEntry(int protocol, std::string src_ip, bool sip_all, std::string dst_ip, unsigned int rport)
 {
-  FilterEntry* new_entry;
-  new_entry = new FilterEntry(protocol, sip, sip_all, dip, rport);
+  FilterEntry* new_entry = new FilterEntry(protocol, src_ip, sip_all, dst_ip, rport);
   entry_list.addElement(new_entry);
-  log("adding prot: %d, rPort:%d, sIP:%s", protocol, rport, inet_ntoa(sip));
-  log(" dIP:%s", inet_ntoa(dip));
+  log("adding prot: %d, rPort:%d, sIP:%s", protocol, rport, src_ip.c_str());
+  log(" dIP:%s", dst_ip.c_str());
 }
 
 int FilterTable::filter(TCPSegment* segment)
@@ -2243,6 +2247,9 @@ void FilterTable::log(const char *fmt, ...) {
     va_end(ap); 
     TTCN_Logger::end_event();
   }
+}
+void FilterTable::clear() {
+  entry_list.destruct();
 }
 
 
